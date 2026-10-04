@@ -20,9 +20,17 @@ public final actor AudioPlayer {
             return
         }
         if let format {
-            audioEngine.connect(avPlayerNode, to: audioEngine.outputNode, format: format)
+            // mainMixerNode, not outputNode: a direct connection to outputNode requires
+            // the format to match the hardware's actual I/O format exactly (no implicit
+            // conversion), while mainMixerNode safely accepts an arbitrary input format
+            // (here, whatever the remote encoder's sample rate/channel layout is).
+            audioEngine.connect(avPlayerNode, to: audioEngine.mainMixerNode, format: format)
             if !audioEngine.isRunning {
-                try? audioEngine.start()
+                do {
+                    try audioEngine.start()
+                } catch {
+                    print("[AudioPlayerDiag] engine.start() failed:", error, "format:", format)
+                }
             }
             connected[playerNode] = true
         } else {

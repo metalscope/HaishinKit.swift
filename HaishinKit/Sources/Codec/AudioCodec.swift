@@ -5,6 +5,12 @@ import AVFoundation
 final class AudioCodec {
     static let defaultFrameCapacity: UInt32 = 1024
     static let defaultInputBuffersCursor = 0
+    /// Upper bound for one compressed (AAC/ADTS) access unit. ADTS's frame-length field is
+    /// 13 bits wide (max 8191 bytes), so this covers anything protocol-legal. Previously a
+    /// hardcoded 1024 bytes, which caps out around ~384 kbps on a clean signal and was
+    /// observed overflowing in practice (an oversized access unit on a degraded link),
+    /// crashing the process via an uncaught NSException in AVAudioBuffer.setByteLength.
+    static let maxCompressedPacketSize = 8192
 
     var settings: AudioCodecSettings = .default {
         didSet {
@@ -65,6 +71,16 @@ final class AudioCodec {
                 }
                 let sampleSize = CMSampleBufferGetSampleSize(sampleBuffer, at: i)
                 let byteCount = sampleSize - ADTSHeader.size
+                // A malformed or oversized access unit (seen in practice under packet loss
+                // on a degraded SRT link) must not reach a fixed-capacity buffer:
+                // AVAudioBuffer.setByteLength traps with an uncaught NSException if length
+                // exceeds byteCapacity, which previously crashed the whole process instead
+                // of just losing one audio frame. Advance offset/timestamp and skip it.
+                guard byteCount > 0, byteCount <= Int(buffer.byteCapacity) else {
+                    presentationTimeStamp = CMTimeAdd(presentationTimeStamp, CMTime(value: CMTimeValue(1024), timescale: sampleBuffer.presentationTimeStamp.timescale))
+                    offset += sampleSize
+                    continue
+                }
                 buffer.packetDescriptions?.pointee = AudioStreamPacketDescription(mStartOffset: 0, mVariableFramesInPacket: 0, mDataByteSize: UInt32(byteCount))
                 buffer.packetCount = 1
                 buffer.byteLength = UInt32(byteCount)
@@ -144,7 +160,7 @@ final class AudioCodec {
             buffer?.frameLength = Self.defaultFrameCapacity
             return buffer
         default:
-            return AVAudioCompressedBuffer(format: inputFormat, packetCapacity: 1, maximumPacketSize: 1024)
+            return AVAudioCompressedBuffer(format: inputFormat, packetCapacity: 1, maximumPacketSize: Self.maxCompressedPacketSize)
         }
     }
 

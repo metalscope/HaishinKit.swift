@@ -41,6 +41,7 @@ final actor AudioPlayerNode {
 
     func setSoundTransfrom(_ soundTransfrom: SoundTransform) {
         soundTransfrom.apply(playerNode)
+        self.soundTransfrom = soundTransfrom
     }
 
     func enqueue(_ audioBuffer: AVAudioBuffer, when: AVAudioTime) async {
@@ -57,7 +58,17 @@ final actor AudioPlayerNode {
         }
         Task {
             audioTime.advanced(Int64(audioBuffer.frameLength))
-            await playerNode.scheduleBuffer(audioBuffer, at: audioTime.at)
+            // Was `at: audioTime.at`. audioTime anchors once per session off
+            // `playerNode.lastRenderTime ?? AVAudioTime(hostTime: 0)`, taken before the
+            // node has ever rendered anything, so lastRenderTime is nil and this
+            // anchors at the mach host-time epoch - a timestamp the render clock can
+            // never actually reach. scheduleBuffer's async completion depends on
+            // reaching the given time, so with that anchor it never returned, for any
+            // buffer, ever: scheduledAudioBuffers grew unboundedly all session, and
+            // nothing was audible despite the engine running and isPlaying == true.
+            // nil lets the node queue buffers back-to-back in its own arrival order,
+            // using its own real clock - confirmed fixed on device (2026-10-04).
+            await playerNode.scheduleBuffer(audioBuffer, at: nil)
             scheduledAudioBuffers -= 1
             if scheduledAudioBuffers == 0 {
                 isBuffering = true
