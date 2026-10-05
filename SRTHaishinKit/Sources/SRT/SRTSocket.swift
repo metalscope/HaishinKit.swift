@@ -154,6 +154,13 @@ final actor SRTSocket {
         }()
         guard status != SRT_ERROR else {
             let reason = SRTRejectReason(socket: socket) ?? .unknown
+            // Close the failed socket instead of leaking it (SRTstreamer fix).
+            // A caller attempt can time out on our side after the listener
+            // already accepted it; left open, that half-connected socket
+            // keeps its UDP port alive and can hold a one-caller listener's
+            // only slot until the process exits.
+            srt_close(socket)
+            socket = SRT_INVALID_SOCK
             throw Error.rejected(reason)
         }
         switch url.mode {

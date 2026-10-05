@@ -52,7 +52,14 @@ final actor MediaLink {
         defer {
             duration += timestamp
         }
-        return await audioPlayer?.currentTime ?? duration
+        // AudioPlayerNode.currentTime is 0.0 (not nil) whenever its node isn't
+        // playing: no audio in the stream, audio not yet pre-rolled, or the
+        // engine stopped by an audio route/configuration change. Paced off a
+        // 0 clock, only the first frame is ever released and the queue fills
+        // (-12764 on every enqueue) - a frozen picture (SRTstreamer fix,
+        // 2026-10-05). Fall back to the display-link clock instead.
+        let audioTime = await audioPlayer?.currentTime ?? 0
+        return 0 < audioTime ? audioTime : duration
     }
 }
 
